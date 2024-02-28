@@ -41,6 +41,8 @@ static const char *TAG = "tls_freertos";
 #define TLS_DEFAULT_PORT 443
 /*-----------------------------------------------------------*/
 
+#if !defined(DEBUG_LOCAL_NO_TLS) || DEBUG_LOCAL_NO_TLS == 0
+
 TlsTransportStatus_t TLS_FreeRTOS_Connect( NetworkContext_t * pNetworkContext,
                                            const char * pHostName,
                                            uint16_t port,
@@ -183,3 +185,124 @@ int32_t TLS_FreeRTOS_send( NetworkContext_t * pNetworkContext,
     return tlsStatus;
 }
 /*-----------------------------------------------------------*/
+
+#elif DEBUG_LOCAL_NO_TLS == 1
+
+TlsTransportStatus_t TLS_FreeRTOS_Connect( NetworkContext_t * pNetworkContext,
+                                           const char * pHostName,
+                                           uint16_t port,
+                                           const NetworkCredentials_t * pNetworkCredentials,
+                                           uint32_t receiveTimeoutMs,
+                                           uint32_t sendTimeoutMs )
+{
+    esp_err_t ret;
+    TlsTransportStatus_t returnStatus = TLS_TRANSPORT_SUCCESS;
+
+    if(  pHostName == NULL   )
+    {
+        ESP_LOGE(TAG, "Invalid input parameter(s): Arguments cannot be NULL. pNetworkContext=%p, "
+                    "pHostName=%p, pNetworkCredentials=%p.",
+                    pNetworkContext,
+                    pHostName,
+                    pNetworkCredentials);
+        return TLS_TRANSPORT_INVALID_PARAMETER;
+    }
+    
+    pNetworkContext->transport = esp_transport_tcp_init();
+    pNetworkContext->transport_list = esp_transport_list_init();
+    ret = esp_transport_list_add(pNetworkContext->transport_list, pNetworkContext->transport, "tcp");
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add transport to list (%d)!", ret);
+    }
+    pNetworkContext->receiveTimeoutMs = receiveTimeoutMs;
+    pNetworkContext->sendTimeoutMs = sendTimeoutMs;
+
+    if (esp_transport_connect(pNetworkContext->transport, pHostName, port, receiveTimeoutMs) < 0) {
+        returnStatus = TLS_TRANSPORT_CONNECT_FAILURE;
+    } else {
+        returnStatus = TLS_TRANSPORT_SUCCESS;
+    }
+
+    /* Clean up on failure. */
+    if( returnStatus != TLS_TRANSPORT_SUCCESS )
+    {
+        if( pNetworkContext != NULL )
+        {
+            esp_transport_close( pNetworkContext->transport );
+            esp_transport_list_destroy( pNetworkContext->transport_list );
+        }
+    }
+    else
+    {
+        ESP_LOGI(TAG, "(Network connection %p) Connection to %s:%d established.",
+                   pNetworkContext,
+                   pHostName, port);
+    }
+
+    return returnStatus;
+}
+/*-----------------------------------------------------------*/
+
+void TLS_FreeRTOS_Disconnect( NetworkContext_t * pNetworkContext )
+{
+    if (( pNetworkContext == NULL ) ) {
+        ESP_LOGE(TAG, "Invalid input parameter(s): Arguments cannot be NULL. pNetworkContext=%p.", pNetworkContext);
+        return;
+    }
+
+    /* Attempting to terminate TCP connection. */
+    esp_transport_close( pNetworkContext->transport );
+
+    /* Free TCP contexts. */
+    esp_transport_list_destroy( pNetworkContext->transport_list );
+}
+/*-----------------------------------------------------------*/
+
+int32_t TLS_FreeRTOS_recv( NetworkContext_t * pNetworkContext,
+                            void * pBuffer,
+                            size_t bytesToRecv )
+{
+    int32_t tlsStatus = 0;
+
+    if (( pNetworkContext == NULL ) || 
+        ( pBuffer == NULL) || 
+        ( bytesToRecv == 0) ) {
+        ESP_LOGE(TAG, "Invalid input parameter(s): Arguments cannot be NULL. pNetworkContext=%p, "
+                "pBuffer=%p, bytesToRecv=%d.", pNetworkContext, pBuffer, bytesToRecv );
+        return ESP_FAIL;
+    }
+
+    tlsStatus = esp_transport_read(pNetworkContext->transport, pBuffer, bytesToRecv, pNetworkContext->receiveTimeoutMs);
+    if (tlsStatus < 0) {
+        ESP_LOGE(TAG, "Reading failed, errno= %d", errno);
+        return ESP_FAIL;
+    }
+
+    return tlsStatus;
+}
+/*-----------------------------------------------------------*/
+
+int32_t TLS_FreeRTOS_send( NetworkContext_t * pNetworkContext,
+                            const void * pBuffer,
+                            size_t bytesToSend )
+{
+    int32_t tlsStatus = 0;
+
+    if (( pNetworkContext == NULL ) || 
+        ( pBuffer == NULL) || 
+        ( bytesToSend == 0) ) {
+        ESP_LOGE(TAG, "Invalid input parameter(s): Arguments cannot be NULL. pNetworkContext=%p, "
+                "pBuffer=%p, bytesToSend=%d.", pNetworkContext, pBuffer, bytesToSend );
+        return ESP_FAIL;
+    }
+
+    tlsStatus = esp_transport_write(pNetworkContext->transport, pBuffer, bytesToSend, pNetworkContext->sendTimeoutMs);
+    if (tlsStatus < 0) {
+        ESP_LOGE(TAG, "Writing failed, errno= %d", errno);
+        return ESP_FAIL;
+    }
+
+    return tlsStatus;
+}
+
+#endif
